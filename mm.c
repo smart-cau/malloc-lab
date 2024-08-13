@@ -75,6 +75,7 @@ static void* extend_heap(size_t words);
 static void* coalesce(void* bp);
 static void place(char* bp, size_t asize);
 static void* find_fit(size_t asize);
+static size_t get_proper_size(size_t size);
 
 /* 
  * mm_init - initialize the malloc package.
@@ -111,18 +112,12 @@ Since the libc malloc always returns payload pointers that are aligned to 8 byte
  */
 void *mm_malloc(size_t size)
 {
-    size_t asize; // block size에 맞게 조정될 size
+    size_t asize = get_proper_size(size); // block size에 맞게 조정될 size
     size_t extend_size; // heap 공간이 부족할 경우 heap을 늘릴 크기
     char* bp;
 
     if (size == 0)
         return NULL;
-
-    /* Adjust block size to include overhead(header + footer) and alignment reps */
-    if (size <= DSIZE)
-        asize = 2 * DSIZE;
-    else
-        asize = DSIZE * ((size + DSIZE + (DSIZE - 1)) / DSIZE);
 
     /* Search the free list for a fit */
     if ((bp = find_fit(asize)) != NULL) {
@@ -177,17 +172,25 @@ void *mm_realloc(void *ptr, size_t size)
         return mm_malloc(size);
     }
 
+    // 복사할 데이터의 크기 계산
+    oldsize = GET_SIZE(HDRP(ptr));
+
+    // 원래 사이즈보다 작은 사이즈를 재할당 하는 경우 최적화
+    if (size < oldsize) {
+        size_t newsize = get_proper_size(size);
+        if (oldsize > newsize && (oldsize - newsize) >= 2 * DSIZE) {
+            place(ptr, newsize);
+            coalesce(NEXT_BLKP(ptr));
+            return ptr;
+        }
+        oldsize = size;
+    }
+
     newptr = mm_malloc(size);
 
     // malloc 실패
     if (!newptr) {
         return NULL;
-    }
-
-    // 복사할 데이터의 크기 계산
-    oldsize = GET_SIZE(HDRP(ptr));
-    if (size < oldsize) {
-        oldsize = size;
     }
 
     memcpy(newptr, ptr, oldsize);
@@ -285,4 +288,11 @@ static void *find_fit(size_t asize)
     }
 
     return NULL;
+}
+
+size_t get_proper_size(size_t size)
+{
+    if (size <= DSIZE)
+        return 2 * DSIZE;
+    return DSIZE * ((size + DSIZE + (DSIZE - 1)) / DSIZE);
 }
