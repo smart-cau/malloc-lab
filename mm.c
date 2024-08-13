@@ -201,7 +201,7 @@ void *mm_realloc(void *ptr, size_t size)
     return newptr;
 }
 
-void *extend_heap(size_t words)
+static void *extend_heap(size_t words)
 {
     char* bp;
     size_t size;
@@ -220,7 +220,7 @@ void *extend_heap(size_t words)
     return coalesce(bp);
 }
 
-void *coalesce(void *bp)
+static void *coalesce(void *bp)
 {
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BKLP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
