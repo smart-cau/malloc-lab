@@ -178,11 +178,17 @@ void *mm_realloc(void *ptr, size_t size)
     // 복사할 데이터의 크기 계산
     oldsize = GET_SIZE(HDRP(ptr));
 
+    if (size == oldsize)
+        return ptr;
+
     size_t newsize = get_proper_size(size);
     // 원래 사이즈보다 작은 사이즈를 재할당 하는 경우 최적화
     if (size < oldsize) {
         if (oldsize > newsize && (oldsize - newsize) >= 2 * DSIZE) {
-            place(ptr, newsize);
+            PUT(HDRP(ptr), PACK(newsize, 1));
+            PUT(FTRP(ptr), PACK(newsize, 1));
+            PUT(HDRP(NEXT_BLKP(ptr)), PACK(oldsize - newsize, 0));
+            PUT(FTRP(NEXT_BLKP(ptr)), PACK(oldsize - newsize, 0));
             coalesce(NEXT_BLKP(ptr));
             return ptr;
         }
@@ -194,6 +200,15 @@ void *mm_realloc(void *ptr, size_t size)
         void* prev_bp = PREV_BLKP(ptr);
         size_t added_size = newsize - oldsize;
         // case 1. next block has enough size
+        // heap의 끝 부분에 도착한 경우
+        if (GET_ALLOC(HDRP(next_bp)) &&
+            GET_SIZE(HDRP(next_bp)) == 0) {
+                if (extend_heap(added_size / WSIZE) == (void*)-1)
+                    return;
+                PUT(HDRP(ptr), PACK(newsize, 1));
+                PUT(FTRP(ptr), PACK(newsize, 1));    
+                return ptr;
+            }
         if (!GET_ALLOC(HDRP(next_bp)) && 
             (GET_SIZE(HDRP(next_bp)) > added_size) && 
             ((GET_SIZE(HDRP(next_bp)) - added_size) >= 2 * DSIZE)
