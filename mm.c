@@ -70,6 +70,7 @@ team_t team = {
 #define PREV_BLKP(bp)    ((char*)(bp) - GET_SIZE(((char*)(bp) - DSIZE)))
 
 /* declare variables & functions */
+typedef enum _block_type { FREE, ALLOC } block_type;
 static char* heap_listp;
 static char* nextfit_lastp;
 static void* extend_heap(size_t words);
@@ -79,6 +80,9 @@ static void* find_fit(size_t asize);
 static void* first_fit(size_t asize);
 static void* next_fit(size_t asize);
 static size_t get_proper_size(size_t size);
+static void* set_block(void* bp, size_t size, block_type type);
+static int is_block_has_enough_size(void* bp, size_t size);
+
 
 /* 
  * mm_init - initialize the malloc package.
@@ -184,11 +188,9 @@ void *mm_realloc(void *ptr, size_t size)
     size_t newsize = get_proper_size(size);
     // 원래 사이즈보다 작은 사이즈를 재할당 하는 경우 최적화
     if (size < oldsize) {
-        if (oldsize > newsize && (oldsize - newsize) >= 2 * DSIZE) {
-            PUT(HDRP(ptr), PACK(newsize, 1));
-            PUT(FTRP(ptr), PACK(newsize, 1));
-            PUT(HDRP(NEXT_BLKP(ptr)), PACK(oldsize - newsize, 0));
-            PUT(FTRP(NEXT_BLKP(ptr)), PACK(oldsize - newsize, 0));
+        if (oldsize > newsize && (oldsize - newsize) >= 2 * DSIZE) {            
+            set_block(ptr, newsize, ALLOC);
+            set_block(NEXT_BLKP(ptr), oldsize - newsize, FREE);
             coalesce(NEXT_BLKP(ptr));
             return ptr;
         }
@@ -205,33 +207,24 @@ void *mm_realloc(void *ptr, size_t size)
             GET_SIZE(HDRP(next_bp)) == 0) {
                 if (extend_heap(added_size / WSIZE) == (void*)-1)
                     return;
-                PUT(HDRP(ptr), PACK(newsize, 1));
-                PUT(FTRP(ptr), PACK(newsize, 1));    
+                set_block(ptr, newsize, ALLOC);
                 return ptr;
             }
-        if (!GET_ALLOC(HDRP(next_bp)) && 
-            (GET_SIZE(HDRP(next_bp)) > added_size) && 
-            ((GET_SIZE(HDRP(next_bp)) - added_size) >= 2 * DSIZE)
-            ) {
-            // mm_free(ptr); // free하면 왜 안됨??? size 그대로 있는데???
+        if (is_block_has_enough_size(next_bp, added_size)) {
             PUT(HDRP(ptr), PACK(newsize, 1));
             PUT(FTRP(ptr), PACK(newsize, 1));
-            PUT(HDRP(NEXT_BLKP(ptr)), PACK(GET_SIZE(HDRP(next_bp)) - added_size, 0));
-            PUT(FTRP(NEXT_BLKP(ptr)), PACK(GET_SIZE(HDRP(next_bp)) - added_size, 0));
+            set_block(ptr, newsize, ALLOC);
+            set_block(NEXT_BLKP(ptr), GET_SIZE(HDRP(next_bp)) - added_size, FREE);            
             return ptr;
         }
         // case 2. prev block has enough size
-        else if (!GET_ALLOC(HDRP(prev_bp)) && 
-            (GET_SIZE(HDRP(prev_bp)) > added_size) && 
-            ((GET_SIZE(HDRP(prev_bp)) - added_size) >= 2 * DSIZE)
-            ) {
+        else if (is_block_has_enough_size(prev_bp, added_size)) {
             newptr = prev_bp;
             size_t prev_size = GET_SIZE(HDRP(prev_bp));
             PUT(HDRP(newptr), PACK(newsize, 1));
             memmove(newptr, ptr, oldsize);
             PUT(FTRP(newptr), PACK(newsize, 1));
-            PUT(HDRP(NEXT_BLKP(newptr)), PACK(prev_size - added_size, 0));
-            PUT(FTRP(NEXT_BLKP(newptr)), PACK(prev_size - added_size, 0));
+            set_block(NEXT_BLKP(newptr), prev_size - added_size, FREE);
             coalesce(NEXT_BLKP(newptr));
             return newptr;
         }
@@ -246,8 +239,7 @@ void *mm_realloc(void *ptr, size_t size)
             PUT(HDRP(newptr), PACK(newsize, 1));
             memmove(newptr, ptr, oldsize);
             PUT(FTRP(newptr), PACK(newsize, 1));
-            PUT(HDRP(NEXT_BLKP(newptr)), PACK(total_size - added_size, 0));
-            PUT(FTRP(NEXT_BLKP(newptr)), PACK(total_size - added_size, 0));
+            set_block(NEXT_BLKP(newptr), total_size - added_size, FREE);
             coalesce(NEXT_BLKP(newptr));
             return newptr;
         }
@@ -347,7 +339,7 @@ static void place(char *bp, size_t asize)
 
 static void *find_fit(size_t asize)
 {
-    /* first_fit */
+    /* next_fit */
     return next_fit(asize);
 }
 
@@ -371,8 +363,7 @@ void *next_fit(size_t asize)
     while (GET_SIZE(HDRP(bp)) > 0)
     {
         if (GET_SIZE(HDRP(bp)) >= asize && !GET_ALLOC(HDRP(bp))) {
-            nextfit_lastp = bp;
-            return (void*)nextfit_lastp;
+            return bp;
         }
         bp = NEXT_BLKP(bp);
     }
@@ -380,8 +371,7 @@ void *next_fit(size_t asize)
     while (GET_SIZE(HDRP(bp)) > 0 && bp < nextfit_lastp)
     {
         if (GET_SIZE(HDRP(bp)) >= asize && !GET_ALLOC(HDRP(bp))) {
-            nextfit_lastp = bp;
-            return (void*)nextfit_lastp;
+            return bp;
         }
         bp = NEXT_BLKP(bp);
     }
@@ -393,4 +383,16 @@ size_t get_proper_size(size_t size)
     if (size <= DSIZE)
         return 2 * DSIZE;
     return DSIZE * ((size + DSIZE + (DSIZE - 1)) / DSIZE);
+}
+
+void* set_block(void* bp, size_t size, block_type type) {
+    PUT(HDRP(bp), PACK(size, type));
+    PUT(FTRP(bp), PACK(size, type));
+}
+
+int is_block_has_enough_size(void *bp, size_t added_size)
+{
+    return !GET_ALLOC(HDRP(bp)) && 
+            (GET_SIZE(HDRP(bp)) > added_size) && 
+            ((GET_SIZE(HDRP(bp)) - added_size) >= 2 * DSIZE);
 }
